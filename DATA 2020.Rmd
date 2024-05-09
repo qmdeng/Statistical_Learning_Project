@@ -1,0 +1,258 @@
+---
+title: "DATA 2020"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+
+```{r}
+day = read.csv("/Users/Murphy1/Desktop/DATA2020/Project2020/data/hour.csv", header = TRUE)
+head(day)
+```
+```{r, include=TRUE}
+library(dplyr)
+
+#select variables season, workingday, weathersit, temp, atemp, hum, windspeed
+day1 <- dplyr::select(day, -c(instant, dteday))
+head(day1)
+```
+```{r, include=TRUE}
+library(pheatmap)
+library(ggplot2)
+library(dslabs)
+library(dplyr)
+library(forcats)
+library(reshape2)
+library(tidyr)
+day1 <- lapply(day1, function(x) as.numeric(x))
+day1 <- data.frame(day1)
+
+y <- day1$cnt
+X <- dplyr::select(day1, -c(cnt))
+
+corr <- round(cor(X),2)
+
+get_upper_tri<-function(corr){
+    corr[lower.tri(corr, diag=TRUE)] <- NA
+    return(corr)
+}
+upper <- get_upper_tri(corr)
+melted_upper <- melt(upper, na.rm=TRUE)
+
+ggplot(data = melted_upper, aes(Var2, Var1, fill = value))+
+ geom_tile(color = "white")+
+ scale_fill_gradient2(low = "brown", high = "wheat", mid = "white", 
+   midpoint = 0, limit = c(-1,1), space = "Lab") +
+  theme(
+  axis.text.x = element_text(angle = 45, vjust = 1, 
+    size = 8, hjust = 1),
+  axis.title.x = element_blank(),
+  axis.title.y = element_blank(),
+  panel.grid.major = element_blank(),
+  panel.border = element_blank(),
+  panel.background = element_blank(),
+  axis.ticks = element_blank())+
+  geom_text(aes(Var2, Var1, label = value), color = "gray", size = 5) +
+  coord_fixed() +
+  labs(fill='correlation') 
+```
+
+
+```{r, include=TRUE}
+#drop atemp
+day1 <- dplyr::select(day1, -c(atemp))
+day1
+```
+
+```{r, include=TRUE}
+# Check Line
+
+fit.all = lm(cnt ~ season + yr + mnth + hr + holiday + workingday + weathersit + temp + hum + windspeed, data = day1)
+
+intercept_only <- lm(cnt ~ 1, data=day1)
+
+forward <- step(intercept_only, direction='forward', 
+                scope=formula(fit.all))
+summary(forward)
+
+#forward
+
+```
+
+```{r,include=TRUE}
+backward <- step(fit.all, direction='backward')
+summary(backward)
+```
+```{r}
+library(glmnet)
+day2 <- day1 %>% dplyr::select(-c(casual, registered))
+day2
+x <- model.matrix(day2$cnt~., day2)[,-1]
+y <- day2 %>% dplyr::select(cnt) %>% unlist() %>% as.numeric()
+
+grid <- 10^seq(10, -2, length = 100)
+
+train <- day2 %>% sample_frac(0.5)
+test <- day2 %>% setdiff(train)
+
+x_train <- model.matrix(train$cnt~., train)[,-1]
+x_test <- model.matrix(test$cnt~., test)[,-1]
+
+y_train <- train %>% dplyr::select(cnt) %>% unlist() %>% as.numeric()
+y_test <- test %>% dplyr::select(cnt) %>% unlist() %>% as.numeric()
+set.seed(1)
+
+#on the full model
+out <- glmnet(x, y, alpha = 1, lambda = grid) 
+
+#cv to choose best lambda
+cv.out <- cv.glmnet(x_train, y_train, alpha = 1) 
+bestlam <- cv.out$lambda.min 
+cat('Best lambda obtained is: ', bestlam)
+
+#lasso with best lambda
+lasso <- glmnet(x, y, alpha = 1, lambda = bestlam)
+predict(lasso, type = "coefficients", s = bestlam)
+#coef(lasso, s=bestlam)
+
+#remove intercept
+lasso.mod <- glmnet(x,y, alpha =1)
+beta <- coef(lasso.mod)
+beta <- as.matrix(beta)
+dim(beta)
+lambda <- lasso.mod$lambda
+length(lambda)
+lam <- rep(lambda, 11)
+length(lam)
+beta_t <- t(beta)
+beta_vec <- as.vector(beta_t)[-c(1:61)]
+length(beta_vec)
+v <- rownames(beta)[-1]
+length(v)
+names <- rep(v, each=61)
+length(beta_vec)
+length(names)
+df <- data.frame(lam, names, beta_vec)
+plot <- ggplot(df, aes(x = lam, y = beta_vec, color = names)) +
+  geom_line() +
+  labs(x = "log(lambda)", y = "Coefficient") +
+  theme_bw() +
+  scale_x_continuous(trans='log10')
+
+plot + ggtitle('Lasso coefficients vs. lambda')
+```
+
+
+```{r}
+day1$cnt <- log(day1$cnt)
+mod_forward <- lm(formula = cnt ~ temp + hr + yr + hum + season + holiday + 
+    windspeed + weathersit + workingday, data = day1)
+plot(mod_forward, which = c(1,2,3,4))
+```
+```{r}
+mod_backward <- lm(formula = cnt ~ season + yr + hr + holiday + workingday + 
+    weathersit + temp + hum + windspeed, data = day1)
+plot(mod_backward, which = c(1,2,3,4))
+```
+
+
+
+
+```{r, include=TRUE}
+# Check the variance 
+library(car)
+ncvTest(fit.all)
+```
+
+
+
+```{r, include=TRUE}
+library(plyr)
+library(readr)
+library(dplyr)
+library(glmnet)
+library(tibble) 
+library(caret)
+
+set.seed(42)
+train_index <- createDataPartition(day1$cnt, p = 0.8, list = FALSE)
+train_set <- day1[train_index,]
+test_set <- day1[-train_index,]
+
+# Train the multiple linear regression model
+model <- lm(formula = cnt ~ season + yr + hr + holiday + workingday + 
+    weathersit + temp + hum + windspeed, data = train_set)
+
+# Make predictions on the test set
+predictions <- predict(model, newdata = test_set)
+
+# Evaluate the model
+mae <- mean(abs(test_set$cnt - predictions))
+mse <- mean((test_set$cnt - predictions)^2)
+r_squared <- 1 - (sum((test_set$cnt - predictions)^2) / sum((test_set$cnt - mean(test_set$cnt))^2))
+
+cat('Mean Absolute Error:', mae, '\n')
+cat('Mean Squared Error:', mse, '\n')
+cat('R-squared:', r_squared, '\n')
+
+rmse <- function(actual, predicted) {
+  return(sqrt(mean((actual - predicted)^2)))
+}
+rmse_value <- rmse(test_set$cnt, predictions)
+cat('Root Mean Squared Error:', rmse_value, '\n')
+
+
+```
+```{r}
+plot(cnt ~ temp + hr + yr + hum + season + holiday + 
+    windspeed + weathersit + workingday, data = day1)
+```
+
+```{r, include=TRUE}
+day2 <- day1[ , -which(names(day1) == "cnt")]
+pca <- prcomp(day2,scale=TRUE)
+variance <- summary(pca)$importance[2,]
+df <- data.frame(Component = 1:length(variance), Variance = variance)
+df_top_10 <- df[1:10,]
+df_top_10 <- df_top_10[order(-df_top_10$Variance),]
+df_top_10
+
+pc <- pca$rotation[, 1: 10]
+z <- melt(pc)
+colnames(z) <- c("Variable", "PC", "value")
+plot <- ggplot(z, aes(x = PC, y = Variable, fill= value)) +
+ geom_tile(color = 'white')+
+ scale_fill_gradient2(low = 'brown', high = 'wheat', mid = 'ivory',
+   midpoint = 0, limit = c(-1,1), space = 'Lab')
+plot
+
+pca_data <- as.data.frame(predict(pca))
+df2 <- pca_data[, 1:2]
+df1 <- subset(day1, select = cnt)
+combined_df <- cbind(df1, df2)
+library(caret)
+train_index <- createDataPartition(combined_df$cnt, p = 0.8, list = FALSE)
+train_set <- combined_df[train_index,]
+test_set <- combined_df[-train_index,]
+# Train the multiple linear regression model
+model2 <- lm(cnt ~ ., data = train_set)
+summary(model2)
+# Make predictions on the test set
+predictions <- predict(model2, newdata = test_set)
+# Evaluate the model
+mae <- mean(abs(test_set$cnt - predictions))
+mse <- mean((test_set$cnt - predictions)^2)
+r_squared <- 1 - (sum((test_set$cnt - predictions)^2) / sum((test_set$cnt - mean(test_set$cnt))^2))
+summary(predictions)
+```
+```{r}
+r_squared
+mae
+mse
+
+```
+
+
+
+
